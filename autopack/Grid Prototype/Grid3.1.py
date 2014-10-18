@@ -507,7 +507,7 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
     # Walk through the faces
     for face in faces:
         # Dist is a small function that calculates the distance between two points.
-        dist = lambda x,y: vlen([y[i] - x[i] for i in range(len(x))])
+        # dist = lambda x,y: vlen([y[i] - x[i] for i in range(len(x))])
         # Get the vertex coordinates and conver to numpy arrays...
         triCoords = [numpy.array(verticesLH[i]) for i in face]
         thisFaceFineCoords = list(triCoords)
@@ -574,7 +574,7 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
             projectedPointIndex = getPointFrom3D(coord[::-1],gridSpacing,gridPtsPerEdge,b)
             projectedIndices.add(projectedPointIndex)
 
-        for P in projectedIndices:
+        for P in list(projectedIndices):
             # Get the point object corresponding to the index, and set its polyhedron attribute to true
             g = gridPoints[P]
             g.representsPolyhedron = True
@@ -706,9 +706,9 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
     print('Superfine was ' + str(superFine) + ' and there were ' + str(mismatchCounter) + ' mismatches.')
     print('Grid construction took ' + str(time() - startTime) + ' seconds for ' + str(len(faces)) + ' faces and ' + str(len(gridPoints)) + ' points.')
     
-    visualizeAtomArray('badPoint', [gridPoints[insidePoints[14088]].globalCoord])
-    visualizeAtomArray('badPointEndPoint',[gridPoints[insidePoints[14088]].testedEndpoint])
-    visualizeAtomArray('badPointCloseFaces',verticesLH[gridPoints[insidePoints[14088]].closeFaces])
+    # visualizeAtomArray('badPoint', [gridPoints[insidePoints[14067]].globalCoord])
+    # visualizeAtomArray('badPointEndPoint',[gridPoints[insidePoints[14067]].testedEndpoint])
+    # visualizeAtomArray('badPointCloseFaces',verticesLH[gridPoints[insidePoints[14067]].closeFaces])
 
     return gridPoints
 
