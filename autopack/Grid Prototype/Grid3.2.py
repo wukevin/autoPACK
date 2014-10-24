@@ -187,54 +187,6 @@ def vlen(v1):
     x1,y1,z1 = v1
     return sqrt(x1*x1 + y1*y1 + z1*z1)
 
-def getCubeIndices(leftHandedCoord,gridPtsPerEdge,boundingBoxOrigin,gridSpacing,zippedNumbers):
-    """
-    Given a left-handed coordinate, the lower left back corner of a volume, the number of grid points
-    per edge, the distance between grid points, and the precomputed distance cube, it returns the
-    indices of points that make up the cube surrounding a point.
-    """
-    NZ,NY,NX = gridPtsPerEdge
-    OZ,OY,OX = boundingBoxOrigin
-    spacing1 = 1./gridSpacing
-
-    zTemp,yTemp,xTemp = leftHandedCoord
-    i,j,k = round((xTemp-OX)*spacing1), round((yTemp-OY)*spacing1), round((zTemp-OZ)*spacing1)
-    cubeIndicies = []
-
-    for d,x,y,z in zippedNumbers:
-        newI, newJ, newK = i + x, j + y, k + z
-        if newI < 0 or newI > (NX-1) or newJ < 0 or newJ > (NY-1) or newK < 0 or newK > (NZ-1):
-            continue
-        desiredPointIndex = int(round(newK*NX*NY + newJ*NX + newI))
-        cubeIndicies.append(desiredPointIndex)
-    return cubeIndicies
-
-def getOctahedronIndices(leftHandedCoord,gridPtsPerEdge,boundingBoxOrigin,gridSpacing):
-    """
-    Similar to getCubeIndices, but isntead of returning indicies of the cube, it retunrs the indices
-    of the six points immediately surrounding the central point that make up an octahedron.
-
-    This was originally written in an attempt to stremline the inside/outside testing pre-flood filling.
-    However, it turned out that the time it took to copute these 6 indices was slow enough to make
-    skipping a few inside/outside ray collision tests not worthwhile. Thus, this function is no longer in
-    use, but will stay here for booking purposes.
-    """
-    NZ,NY,NX = gridPtsPerEdge
-    OZ,OY,OX = boundingBoxOrigin
-    spacing1 = 1./gridSpacing
-
-    zTemp,yTemp,xTemp = leftHandedCoord
-    i,j,k = round((xTemp-OX)*spacing1), round((yTemp-OY)*spacing1), round((zTemp-OZ)*spacing1)
-    octahedronIndices = []
-    zippedNumbers = [(0,0,1),(0,0,-1),(0,1,0),(0,-1,0),(1,0,0),(-1,0,0)]
-    for x,y,z in zippedNumbers:
-        newI, newJ, newK = i + x, j + y, k + z
-        if newI < 0 or newI > (NX-1) or newJ < 0 or newJ > (NY-1) or newK < 0 or newK > (NZ-1):
-            continue
-        desiredPointIndex = int(round(newK*NX*NY + newJ*NX + newI))
-        octahedronIndices.append(desiredPointIndex)
-    return octahedronIndices
-
 def f_ray_intersect_polyhedron(pRayStartPos, pRayEndPos, faces,vertices, pTruncateToSegment):
     """This function returns TRUE if a ray intersects a triangle.
     It also calculates and returns the UV coordinates of said colision as part of the intersection test,
@@ -341,18 +293,6 @@ def f_ray_intersect_polyhedron(pRayStartPos, pRayEndPos, faces,vertices, pTrunca
     #vBackfaceFinal = vBackfaces[distances.index(min(distances))]
     return vHitCount,vBackfaceFinal
 
-def _findTriangleCenter(*args):
-    """
-    Given three coordinates, it calculates the center of the triangle by averaging
-    the coordinates in each axes.
-    """
-    p1,p2,p3 = args[0]
-    x = zip(p1,p2,p3)
-    result = []
-    for elem in x:
-        result.append(sum(elem)/len(elem))
-    return result
-
 def findPointsCenter(*args):
     # Average down the column, such that we're averaging across all measurements in one dimension
     center = numpy.mean(args[0], axis = 0)
@@ -365,99 +305,7 @@ def squaredTwoPointDistance(point1,point2):
     dist = sum(distsSquare)
     return dist
 
-def projectPolyhedronToGrid(gridSpacing):
-    startTime = time()
-    from math import ceil
-    # Get the object, and decompose it
-    object_target = helper.getCurrentSelection()[0]
-    faces,verticesLH,vnormals,faceNormals = helper.DecomposeMesh(object_target,edit=False,copy=False,tri=True,transform=True,fn=True)
-    # Setup a bounding box for our polyhedron
-    b = setupBBOX(object_target)
-    corners = b.getBoundingBox()
-    
-    # Create grid points to fill in our bbox with grid points at regular distances
-    points, gridPtsPerEdge = makeGrid(corners[0],corners[1],gridSpacing) # These are left-handed
-
-    # Create a list of all our gridPoint objects
-    gridPoints = []
-    i = 0
-    for point in points:
-        gridPoints.append(gridPoint(i,point,isPolyhedron = False))
-        i += 1
-    assert len(gridPoints) == len(points)
-
-    # Create grid points to fill in our bbox with grid points at regular distances
-    points, gridPtsPerEdge = makeGrid(corners[0],corners[1],gridSpacing) # These are left-handed
-
-    # For every face in the polyhedron
-    allCoordinates = []
-    for face in faces:
-        # Dist is a small function that calculates the distance between two points.
-        dist = lambda x,y: vlen([y[i] - x[i] for i in range(len(x))])
-        # Get the vertex coordinates and conver to numpy arrays...
-        triCoords = [numpy.array(verticesLH[i]) for i in face]
-        allCoordinates.extend(triCoords)
-        # ...use them to define the u/v vectors
-        pos = triCoords[0]
-        u = triCoords[1] - pos
-        v = triCoords[2] - pos
-        # SOmetimes the hypotenuse isn't fully represented. To remedy this, we will use an addition w vector
-        w = triCoords[2] - triCoords[1]
-
-        # If either u or v is greater than the grid spacing, then we need to subdivide it
-        # We will use ceil: if we have a u of length 16, and grid spacing of 5, then we want
-        # a u at 0, 5, 10, 15 which is [0, 1, 2, 3] * gridSpacing. We need ceil to make this happen.
-        
-        # This is a much more efficient solution than the previous method of artificially increasing
-        # the densith of the polygon mesh by 4, then mapping each of those small points to the grid.
-        # However, it is also leaks more, for (as of yet) unknown reasons.
-        
-        # Minimum is one because range(1) gives us [0]
-        uSubunits, vSubunits, wSubunits = 1, 1, 1
-        if vlen(u) > gridSpacing:
-            uSubunits = ceil(vlen(u)/gridSpacing)
-        if vlen(v) > gridSpacing:
-            vSubunits = ceil(vlen(v)/gridSpacing)
-        if vlen(w) > gridSpacing:
-            wSubunits = ceil(vlen(w)/gridSpacing)
-        # Because we have observed leakage, maybe we want to try trying a denser interpolation, using numpy's linspace?
-        for uSub in range(uSubunits):
-            percentU = uSub * gridSpacing / vlen(u)
-            assert percentU < 1.0 # Make sure that we have not stepped outside of our original u vector
-            # h represents the height of the hypotenuse at this u. We cannot go past the hypotenuse, so this will be
-            # our upper bound.
-            h = percentU * u + (1 - percentU) * v
-            for vSub in range(vSubunits):
-                percentV = vSub * gridSpacing / vlen(v)
-                assert percentV < 1.0 # Make sure that we have not stepped oustide of our original v vector.
-                interpolatedPoint = percentU * u + percentV * v
-                # The original if: statement asks if the distance from the origin to the interpolated point is less than
-                # the distance from the origin to the hypotenuse point.
-                # if vlen(interpolatedPoint) < vlen(h):
-                # Wouldn't it be a better idea to measure distance to the u position instead?
-                if (vlen(interpolatedPoint - percentU * u) < vlen(h - percentU * u)):
-                    allCoordinates.append(interpolatedPoint + pos)
-                else:
-                    # Used to be a break, changed to continue (not 100% sure if it made too much difference)
-                    continue
-        # Because the above only interpolates the face, and may not completely capture the hypotenuse, let's separately
-        # interpolate points on the hypotenuse (the w vector)
-        for wSub in range(wSubunits):
-            percentW = wSub * gridSpacing / vlen(w)
-            if percentW > 1.0:
-                percentW = 1.0
-            interpolatedPoint = percentW * w
-            allCoordinates.append(interpolatedPoint + triCoords[1])
-    visualizeAtomArray('fineCoords',allCoordinates,5)
-    projectedIndices = set()
-    for coord in allCoordinates:
-        projectedPointIndex = getPointFrom3D(coord[::-1],gridSpacing,gridPtsPerEdge,b)
-        projectedIndices.add(projectedPointIndex)
-    visualizeAtomArray('projectedCoords',[points[i] for i in projectedIndices],5)
-    print('Projecting polyhedron to grid took ' + str(time() - startTime) + ' seconds.')
-    return(projectedIndices)
-
-def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
+def projectPolyhedronToGrid2(gridSpacing, radius = None):
     """
     Takes a polyhedron, and builds a grid. In this grid:
         - Projects the polyhedron to the grid.
@@ -485,7 +333,8 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
     # Create grid points to fill in our bbox with grid points at regular distances
     points, gridPtsPerEdge = makeGrid(corners[0],corners[1],gridSpacing) # These are left-handed
 
-    # Create a list of all our gridPoint objects
+    # Create a gridPoint object for every single point we have in our grid. This pre-allocates all memory, so that future
+    # computations are faster.
     gridPoints = []
     i = 0
     for point in points:
@@ -493,18 +342,19 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
         i += 1
     assert len(gridPoints) == len(points)
 
+    # Make a precomputed distance cube, where 
     distanceCube,distX,distY,distZ = makeMarchingCube(gridSpacing,radius)
-    # Flatten and combine these arrays, so that it's easier to iterate over
+    # Flatten and combine these arrays. This makes it easier to iterate over.
     distanceCubeF,distXF,distYF,distZF = distanceCube.flatten(),distX.flatten(),distY.flatten(),distZ.flatten()
     zippedNumbers = zip(distanceCubeF,distXF,distYF,distZF)
 
     NZ,NY,NX = gridPtsPerEdge
     OZ, OY, OX = b.getBoundingBox()[0]
-    spacing1 = 1./gridSpacing
-    # For every face in the polyhedron
-    allCoordinates = []
+    spacing1 = 1./gridSpacing # Inverse of the spacing. We compute this here, so we don't have to recompute it repeatedly
+    allCoordinates = [] # Tracker for all the fine coordiantes that we have interpolated for the faces of the polyhedron
     pointsToTestInsideOutside = set()
-    # Walk through the faces
+    # Walk through the faces, projecting each to the grid and marking immediate neighbors so we can test said 
+    # neighbors for inside/outside later.
     for face in faces:
         # Dist is a small function that calculates the distance between two points.
         # dist = lambda x,y: vlen([y[i] - x[i] for i in range(len(x))])
@@ -512,11 +362,12 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
         triCoords = [numpy.array(verticesLH[i]) for i in face]
         thisFaceFineCoords = list(triCoords)
         allCoordinates.extend(triCoords)
-        # ...use them to define the u/v vectors
+        # We will use these u/v vectors to interpolate points that reside on the face
         pos = triCoords[0]
         u = triCoords[1] - pos
         v = triCoords[2] - pos
-        # SOmetimes the hypotenuse isn't fully represented. To remedy this, we will use an addition w vector
+        # Smetimes the hypotenuse isn't fully represented. To remedy this, we will use an additional w vector
+        # to interpolate points on the hypotenuse
         w = triCoords[2] - triCoords[1]
 
         # If either u or v is greater than the grid spacing, then we need to subdivide it
@@ -531,7 +382,8 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
         # temporarily use a somewhat denser gridspacing to interpolate, and then project back onto our original spacing.
         # We'll decrease the gridspacing by 25% (so that it's 75% of the original). This seems to fix the issue without
         # any appreciable increase in computation time.
-        gridSpacingTempFine = gridSpacing * 3 / 4
+        gridSpacingTempFine = gridSpacing / 3
+        # Determine the number of grid spacing-sized points we can fit on each vector.
         # Minimum is one because range(1) gives us [0]
         uSubunits, vSubunits, wSubunits = 1, 1, 1
         if vlen(u) > gridSpacingTempFine:
@@ -544,7 +396,7 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
         for uSub in range(uSubunits):
             percentU = uSub * gridSpacingTempFine / vlen(u)
             percentU = min(percentU, 1.0) # Make sure that we have not stepped outside of our original u vector
-            # h represents the height of the hypotenuse at this u. We cannot go past the hypotenuse, so this will be
+            # h represents the height of the hypotenuse at this u. Naturally, we cannot go past the hypotenuse, so this will be
             # our upper bound.
             h = percentU * u + (1 - percentU) * v
             for vSub in range(vSubunits):
@@ -552,29 +404,35 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
                 percentV = min(percentV, 1.0) # Make sure that we have not stepped oustide of our original v vector.
                 interpolatedPoint = percentU * u + percentV * v
                 # The original if: statement asks if the distance from the origin to the interpolated point is less than
-                # the distance from the origin to the hypotenuse point.
+                # the distance from the origin to the hypotenuse point, as such:
                 # if vlen(interpolatedPoint) < vlen(h):
-                # Wouldn't it be a better idea to measure distance to the u position instead?
+                # Wouldn't it be a better idea to measure distance to the u position instead? This is implemented below.
                 if (vlen(interpolatedPoint - percentU * u) < vlen(h - percentU * u)):
                     allCoordinates.append(interpolatedPoint + pos)
                     thisFaceFineCoords.append(interpolatedPoint + pos)
                 else:
-                    # Used to be a break, changed to continue (not 100% sure if it made too much difference)
                     break
         # Because the above only interpolates the face, and may not completely capture the hypotenuse, let's separately
-        # interpolate points on the hypotenuse (the w vector)
+        # interpolate points on the hypotenuse (the w vector). This way we can be 100% sure that our final solution is 
+        # completely leak-proof
         for wSub in range(wSubunits):
+            # Apply the same proceudre we did above for u/v, just for w (for hypotenuse interpolation)
             percentW = wSub * gridSpacingTempFine / vlen(w)
             percentW = min(percentW, 1.0)
             interpolatedPoint = percentW * w
             allCoordinates.append(interpolatedPoint + triCoords[1])
             thisFaceFineCoords.append(interpolatedPoint + triCoords[1])
         projectedIndices = set()
+        # Once we have interpolated the face, let's project each interpolated point to the grid.
         for coord in thisFaceFineCoords:
             projectedPointIndex = getPointFrom3D(coord[::-1],gridSpacing,gridPtsPerEdge,b)
             projectedIndices.add(projectedPointIndex)
 
+        # Walk through each grid point that our face spans, gather its closest neighbors, and annotate the neighbors with
+        # minimum distance and closest faces, and flag them for testing inside/outside later.
         for P in list(projectedIndices):
+            # if P == 53144:
+            #     print('We have projected to the point that causes issues!!!!!!!!!!!')
             # Get the point object corresponding to the index, and set its polyhedron attribute to true
             g = gridPoints[P]
             g.representsPolyhedron = True
@@ -589,7 +447,11 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
                     continue
                 # Get the point index that this coordinate corresponds to.
                 desiredPointIndex = int(round(newK*NX*NY + newJ*NX + newI))
+                # if desiredPointIndex == 54199:
+                #     print('HIT with face ' + str(face) + ' and polygon point ' + str(P))
                 desiredPoint = gridPoints[desiredPointIndex]
+                if desiredPoint.representsPolyhedron == True:
+                    continue
                 # Add the current face to the its list of closest faces
                 if face not in desiredPoint.closeFaces:
                     desiredPoint.closeFaces.append(face)
@@ -597,19 +459,19 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
                 desiredPoint.allDistances.append((v,d))
                 if d < desiredPoint.minDistance:
                     desiredPoint.minDistance = d
-                    desiredPoint.closestFaceIndex = len(desiredPoint.closeFaces) - 1
                 # Later down the road, we want to test as few points as possible for inside/outside. Therefore,
                 # we will only test points that are 
-                if abs(x) <= 1 and abs(y) <= 1 and abs(z) <= 1:
-                    pointsToTestInsideOutside.add(desiredPointIndex)
-    visualizeAtomArray('fineCoords',allCoordinates,5)
+                # if abs(x) <= 1 and abs(y) <= 1 and abs(z) <= 1:
+                #     pointsToTestInsideOutside.add(desiredPointIndex)
+    # visualizeAtomArray('fineCoords',allCoordinates,5)
     projectedIndices = [x.index for x in gridPoints if x.representsPolyhedron == True]
     # projectedIndices = set()
     # for coord in allCoordinates:
     #     projectedPointIndex = getPointFrom3D(coord[::-1],gridSpacing,gridPtsPerEdge,b)
     #     projectedIndices.add(projectedPointIndex)
     # visualizeAtomArray('projectedCoords',[points[i] for i in projectedIndices],5)
-    print('Projecting polyhedron to grid took ' + str(time() - startTime) + ' seconds.')
+    timeFinishProjection = time()
+    print('Projecting polyhedron to grid took ' + str(timeFinishProjection - startTime) + ' seconds.')
     
     # Let's start filling in inside outside. Here's the general algorithm:
     # Walk through all the points in our grid. Once we encounter a point that has closest faces, 
@@ -628,7 +490,7 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
     for g in gridPoints:        
         # Check if we've started a new line. If so, then we reset everything.
         # This test should precede all other test, because we don't want old knowldge
-        # to carry over to the new line. 
+        # to carry over to the new line, since we don't know if the polygon is only partially encapsulated by the bounding box.
         if g.index > 0: # We can't check the first element, so we can skip it. 
             coordDiff = g.globalCoord - gridPoints[g.index - 1].globalCoord
             coordDiffNonzero = [x != 0 for x in coordDiff]
@@ -668,16 +530,16 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
             numHits, thisBackFace = f_ray_intersect_polyhedron(g.globalCoord,endPoint,g.closeFaces,verticesLH,False)
             
             # We can check the face as well if we want to be super precise. If they dont' agree, we then check against the entire polyhedron.
-            if superFine == True:
-                if len(g.closeFaces) > 1:
-                    uniquePoints2 = []
-                    [uniquePoints2.append(x) for x in g.closeFaces[1] if x not in uniquePoints2]
-                    uniquePointsCoords2 = verticesLH[uniquePoints2]
-                    endPoint2 = findPointsCenter(uniquePointsCoords2)
-                    numHits2, thisBackFace2 = f_ray_intersect_polyhedron(g.globalCoord,endPoint2,g.closeFaces,verticesLH,False)
-                if len(g.closeFaces) == 1 or thisBackFace != thisBackFace2:
-                    mismatchCounter += 1
-                    numHits, thisBackFace = f_ray_intersect_polyhedron(g.globalCoord,numpy.array([0.0,0.0,0.0]),faces,verticesLH,False)
+            # if superFine == True:
+            #     if len(g.closeFaces) > 1:
+            #         uniquePoints2 = []
+            #         [uniquePoints2.append(x) for x in g.closeFaces[1] if x not in uniquePoints2]
+            #         uniquePointsCoords2 = verticesLH[uniquePoints2]
+            #         endPoint2 = findPointsCenter(uniquePointsCoords2)
+            #         numHits2, thisBackFace2 = f_ray_intersect_polyhedron(g.globalCoord,endPoint2,g.closeFaces,verticesLH,False)
+            #     if len(g.closeFaces) == 1 or thisBackFace != thisBackFace2:
+            #         mismatchCounter += 1
+            #         numHits, thisBackFace = f_ray_intersect_polyhedron(g.globalCoord,numpy.array([0.0,0.0,0.0]),faces,verticesLH,False)
             
             # Fill in inside outside attribute for this point, as pRayStartPos, pRayEndPos, faces, vertices, pTruncateToSegmentll as for any points before it
             g.isOutside = not thisBackFace
@@ -695,7 +557,7 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
         else:
             if g.isOutside == None:
                 g.isOutside = True
-    
+    print('Flood filling grid inside/outside took ' + str(time() - timeFinishProjection) + ' seconds.')
     insidePoints = [g.index for g in gridPoints if g.isOutside == False]
     outsidePoints = [g.index for g in gridPoints if g.isOutside == True]
     surfacePoints = [g.index for g in gridPoints if g.representsPolyhedron == True]
@@ -703,13 +565,16 @@ def projectPolyhedronToGrid2(gridSpacing, radius = None, superFine = False):
     visualizeAtomArray('insidePoints',[points[i] for i in insidePoints],0.5)
     visualizeAtomArray('outsidePoints',[points[i] for i in outsidePoints],0.5)
     visualizeAtomArray('surfacePoints',[points[i] for i in surfacePoints],0.5)
-    print('Superfine was ' + str(superFine) + ' and there were ' + str(mismatchCounter) + ' mismatches.')
+    # if superFine == True:
+    #     print('Superfine was ' + str(superFine) + ' and there were ' + str(mismatchCounter) + ' mismatches.')
     print('Grid construction took ' + str(time() - startTime) + ' seconds for ' + str(len(faces)) + ' faces and ' + str(len(gridPoints)) + ' points.')
     
-    # visualizeAtomArray('badPoint', [gridPoints[insidePoints[14067]].globalCoord])
-    # visualizeAtomArray('badPointEndPoint',[gridPoints[insidePoints[14067]].testedEndpoint])
-    # visualizeAtomArray('badPointCloseFaces',verticesLH[gridPoints[insidePoints[14067]].closeFaces])
+    # print('The bad point is at global index ' + str(insidePoints[15090]))
+    # visualizeAtomArray('badPoint', [gridPoints[insidePoints[15090]].globalCoord])
+    # visualizeAtomArray('badPointEndPoint',[gridPoints[insidePoints[15090]].testedEndpoint])
+    # visualizeAtomArray('badPointCloseFaces',verticesLH[gridPoints[insidePoints[15090]].closeFaces])
+    # visualizeAtomArray('badPointMasterPoint', [gridPoints[53144].globalCoord])
 
     return gridPoints
 
-projectPolyhedronToGrid2(5, superFine = False)
+projectPolyhedronToGrid2(5)
