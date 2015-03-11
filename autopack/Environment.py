@@ -637,8 +637,10 @@ class Gradient:
             rnd -= w
             if rnd < 0:
                 return listPts[i]
-                
-class Grid:
+
+#backward compatibility with kevin method
+from autopack.Grid import Grid  as G               
+class Grid(G):
     """
     The Grid class
     ==========================
@@ -646,9 +648,10 @@ class Grid:
     3d positions, distances, freePoints and inside/surface points from organelles.
     NOTE : thi class could be completly replace if openvdb is wrapped to python.
     """
-    def __init__(self):
+    def __init__(self,boundingBox=([0,0,0], [.1,.1,.1]),space=10.0):
         #a grid is attached to an environement
-        self.boundingBox=([0,0,0], [.1,.1,.1])
+        G.__init__(self,boundingBox=boundingBox,space=space,setup=False)
+        self.boundingBox=boundingBox
         # this list provides the id of the component this grid points belongs
         # to. The id is an integer where 0 is the Histological Volume, and +i is
         # the surface of compartment i and -i is the interior of compartment i
@@ -667,8 +670,8 @@ class Grid:
         self.distToClosestSurf = []
         self.distToClosestSurf_store = []
         
-        self.diag=None
-        self.gridSpacing = None
+        self.diag=self.getDiagonal()
+        self.gridSpacing = space*1.1547
         self.nbGridPoints = None
         self.nbSurfacePoints = 0
         self.gridVolume = 0 # will be the toatl number of grid points
@@ -685,7 +688,16 @@ class Grid:
         self.result_filename=None   #used after pack to store result
 
         self.encapsulatingGrid = 1
-
+        self.gridVolume, self.nbGridPoints = self.computeGridNumberOfPoint(boundingBox, space)
+        self.create3DPointLookup()
+        self.getDiagonal()
+        self.nbSurfacePoints = 0
+        self.gridPtId = numpy.zeros(self.gridVolume,'i')#[0]*nbPoints
+        #self.distToClosestSurf = [self.diag]*self.gridVolume#surface point too?
+        self.distToClosestSurf = numpy.ones(self.gridVolume)*self.diag#(self.distToClosestSurf)
+        self.freePoints = list(range(self.gridVolume))
+        self.nbFreePoints =len(self.freePoints)
+        
     def reset(self,):
         #reset the  distToClosestSurf and the freePoints
         #boundingBox shoud be the same otherwise why keeping the grid
@@ -1035,7 +1047,7 @@ class Environment(CompartmentList):
                     "placeMethod": {"name":"placeMethod","value":"jitter","values":self.listPlaceMethod,"default":"placeMethod","type":"liste","description":"     Overriding Packing Method = ","width":30},
                     "use_gradient":{"name":"use_gradient","value":False,"default":False,"type":"bool","description":"Use gradients if defined","width":150},
                     "gradients":{"name":"gradients","value":"","values":[],"default":"","type":"liste","description":"Gradients available","width":150},
-                    "innerGridMethod": {"name":"innerGridMethod","value":"bhtree","values":["bhtree","sdf","jordan","jordan3","pyray","kevin"],"default":"innerGridMethod","type":"liste","description":"     Method to calculate the inner grid:","width":30},
+                    "innerGridMethod": {"name":"innerGridMethod","value":"bhtree","values":["bhtree","sdf","jordan","jordan3","pyray","floodfill"],"default":"innerGridMethod","type":"liste","description":"     Method to calculate the inner grid:","width":30},
                     "overwritePlaceMethod":{"name":"overwritePlaceMethod","value":False,"default":False,"type":"bool","description":"Overwrite per-ingredient packing method with Overriding Packing Method:","width":300},
                     "saveResult": {"name":"saveResult","value":False,"default":False,"type":"bool","description":"Save packing result to .apr file (enter full path below):","width":200},
                     "resultfile": {"name":"resultfile","value":"fillResult","default":"fillResult","type":"filename","description":"result filename","width":200},
@@ -1167,6 +1179,8 @@ class Environment(CompartmentList):
                    kwds=None,result=False,
                    grid=False,packing_options=False,
                    indent=False):
+        if result :
+            self.collectResultPerIngredient()
         if useXref is None :
             useXref = self.useXref
         if format_output == "json":
@@ -1728,7 +1742,9 @@ class Environment(CompartmentList):
         if self.use_halton:
             from autopack.Grid import HaltonGrid as Grid
         else :
-            from autopack.Grid import Grid            
+            from autopack.Grid import Grid    
+        if self.innerGridMethod == "floodfill" :
+            from autopack.Environment import Grid
         #check viewer, and setup the progress bar               
         self.reportprogress(label="Building the Master Grid")
         if self.smallestProteinSize == 0 :
@@ -1834,7 +1850,8 @@ class Environment(CompartmentList):
         """        
         aInteriorGrids = []
         aSurfaceGrids = []
-
+        a=[]
+        b=[]
         for compartment in self.compartments:
             print("in Environment, compartment.isOrthogonalBoudingBox =", compartment.isOrthogonalBoudingBox)
             b = []
@@ -1869,9 +1886,9 @@ class Environment(CompartmentList):
             elif self.innerGridMethod == "jordan3" and compartment.isOrthogonalBoudingBox!=1:  # surfaces and interiors will be subtracted from it as normal!
                 a, b = compartment.BuildGrid_jordan(self,ray=3)
             elif self.innerGridMethod == "pyray" and compartment.isOrthogonalBoudingBox!=1:  # surfaces and interiors will be subtracted from it as normal!
-                a, b = compartment.BuildGrid_pyray(self)    
-            elif self.innerGridMethod == "kevin" and compartment.isOrthogonalBoudingBox!=1:
-                a, b = compartment.BuildGrid_kevin(self)
+                a, b = compartment.BuildGrid_pyray(self)  
+            elif self.innerGridMethod == "floodfill" and compartment.isOrthogonalBoudingBox!=1:  # surfaces and interiors will be subtracted from it as normal!
+                a, b = compartment.BuildGrid_kevin(self)                  
             aInteriorGrids.append(a)
             print("I'm ruther in the loop")
             aSurfaceGrids.append(b)
@@ -2892,9 +2909,7 @@ class Environment(CompartmentList):
         #if bullet build the organel rbnode
         if self.placeMethod == "pandaBullet":
             self.setupPanda()
-            for o in self.compartments:
-                if o.rbnode is None :
-                    o.rbnode = self.addMeshRBOrganelle(o)
+
         if usePP :
             import pp
             self.grab_cb = IOutils.GrabResult() 
@@ -3917,6 +3932,12 @@ class Environment(CompartmentList):
             self.octree = Octree(self.grid.getRadius(),helper=helper)#Octree((0,0,0),self.grid.getRadius())   #0,0,0 or center of grid?         
             
     def setupPanda(self,):
+        try :
+            import panda3d
+        except :
+            print ("panda3d not found, method switch to jitter")
+            self.placeMethod ="jitter"
+            return
         self.rb_func_dic = {"bullet":{
         "SingleSphere":self.addSingleSphereRB,
         "SingleCube":self.addSingleCubeRB,
@@ -3963,6 +3984,9 @@ class Environment(CompartmentList):
             self.static=[]
             self.moving = None
             self.rb_panda = []
+        for o in self.compartments:
+            if o.rbnode is None :
+                o.rbnode = self.addMeshRBOrganelle(o)
 
     def delRB(self, node):
         if panda3d is None :
